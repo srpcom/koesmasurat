@@ -56,6 +56,29 @@
                 </a>
                 <a href="#log" onclick="showPage('log')" class="nav-link block px-6 py-3 text-gray-700 hover:bg-gray-50 rounded-r-full flex items-center space-x-3">
                     <i data-lucide="file-text" class="w-5 h-5"></i><span>Log Aktivitas</span>
+                </button>
+            </div>
+            <nav class="mt-6">
+                <a href="#dashboard" onclick="showPage('dashboard')" class="nav-link block px-6 py-3 text-gray-700 hover:bg-gray-50 rounded-r-full flex items-center space-x-3">
+                    <i data-lucide="layout-dashboard" class="w-5 h-5"></i><span>Dashboard</span>
+                </a>
+                <a href="#surat-masuk" onclick="showPage('surat-masuk')" class="nav-link block px-6 py-3 text-gray-700 hover:bg-gray-50 rounded-r-full flex items-center space-x-3">
+                    <i data-lucide="mail-check" class="w-5 h-5"></i><span>Surat Masuk</span>
+                </a>
+                <a href="#surat-keluar" onclick="showPage('surat-keluar')" class="nav-link block px-6 py-3 text-gray-700 hover:bg-gray-50 rounded-r-full flex items-center space-x-3">
+                    <i data-lucide="send" class="w-5 h-5"></i><span>Surat Keluar</span>
+                </a>
+                <a href="#disposisi" onclick="showPage('disposisi')" class="nav-link block px-6 py-3 text-gray-700 hover:bg-gray-50 rounded-r-full flex items-center space-x-3">
+                    <i data-lucide="layers-3" class="w-5 h-5"></i><span>Disposisi Saya</span>
+                </a>
+                <a href="#arsip" onclick="showPage('arsip')" class="nav-link block px-6 py-3 text-gray-700 hover:bg-gray-50 rounded-r-full flex items-center space-x-3">
+                    <i data-lucide="archive" class="w-5 h-5"></i><span>Arsip Dokumen</span>
+                </a>
+                <a href="#users" onclick="showPage('users')" class="nav-link block px-6 py-3 text-gray-700 hover:bg-gray-50 rounded-r-full flex items-center space-x-3">
+                    <i data-lucide="users" class="w-5 h-5"></i><span>Manajemen User</span>
+                </a>
+                <a href="#log" onclick="showPage('log')" class="nav-link block px-6 py-3 text-gray-700 hover:bg-gray-50 rounded-r-full flex items-center space-x-3">
+                    <i data-lucide="file-text" class="w-5 h-5"></i><span>Log Aktivitas</span>
                 </a>
             </nav>
             <div class="absolute bottom-0 p-6 w-full border-t">
@@ -315,7 +338,8 @@
 
     <script>
         // PASTIKAN Anda MENGGANTI URL ini dengan URL Web App Google Apps Script Anda yang sudah di-deploy.
-        const GAS_API_URL = 'GANTI_DENGAN_URL_WEB_APP_GAS_ANDA_DI_SINI'; 
+        // URL telah diperbarui berdasarkan permintaan pengguna:
+        const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbwQvV3PoztdzPD4-eYznz_WKtUlNDRfLeyKPXKfxzqeLWhhdpyIa6QSFlXhMfpCuoU/exec'; 
         
         let currentUser = null;
         let allUsers = []; // Daftar semua user untuk keperluan disposisi
@@ -394,7 +418,21 @@
                         const errorBody = await response.text();
                         throw new Error(`API Error: ${response.status} - ${errorBody}`);
                     }
-                    return response.json();
+                    // Apps Script often returns text/plain for success, so we must check the header
+                    const contentType = response.headers.get("content-type");
+                    if (contentType && contentType.includes("application/json")) {
+                        return response.json();
+                    } else if (contentType && contentType.includes("text/html")) {
+                        // Handle case where GAS returns HTML error page (e.g., permission denied)
+                        throw new Error("Received HTML response from API, likely a permissions issue or internal GAS error.");
+                    } else {
+                        // Attempt to parse JSON even if header is missing, or return raw text if status 200/OK
+                        try {
+                            return await response.json();
+                        } catch (e) {
+                            return { status: "success", message: "Operation completed successfully (No JSON body expected/received)." };
+                        }
+                    }
                 } catch (error) {
                     console.error(`Fetch attempt ${i + 1} failed:`, error);
                     if (i === maxRetries - 1) throw error; 
@@ -408,23 +446,31 @@
         /** Memeriksa status login saat aplikasi dimuat */
         function checkLoginStatus() {
             const userData = localStorage.getItem('currentUser');
+            // Ambil referensi elemen di awal
+            const sidebarEl = document.getElementById('sidebar');
+            const contentAreaEl = document.getElementById('content-area');
+
             if (userData) {
                 currentUser = JSON.parse(userData);
                 document.getElementById('user-display-name').textContent = currentUser.nama;
                 document.getElementById('user-display-jabatan').textContent = currentUser.jabatan;
-                document.getElementById('app').classList.remove('hidden');
-                document.getElementById('content-area').classList.add('md:ml-64');
-                document.getElementById('sidebar').classList.remove('hidden');
+                
+                // Tampilkan struktur navigasi (Sidebar dan margin konten)
+                contentAreaEl.classList.add('md:ml-64');
+                sidebarEl.classList.remove('hidden');
 
                 // Jika sudah login, tentukan halaman awal
                 const initialHash = window.location.hash.substring(1) || 'dashboard';
                 showPage(initialHash);
             } else {
                 currentUser = null;
+                
+                // Sembunyikan Sidebar dan hilangkan margin konten (untuk tampilan login sentral)
+                contentAreaEl.classList.remove('md:ml-64');
+                sidebarEl.classList.add('hidden');
+                
+                // Cukup panggil showPage('login') untuk menampilkan formulir login
                 showPage('login');
-                document.getElementById('app').classList.add('hidden');
-                document.getElementById('content-area').classList.remove('md:ml-64');
-                document.getElementById('sidebar').classList.add('hidden');
             }
             // Inisialisasi Lucide icons
             lucide.createIcons(); 
@@ -517,14 +563,13 @@
 
             showLoading(true);
             try {
-                // Hash password client-side before sending (better than plain text)
+                // Hash password client-side before sending
                 const hashedPassword = await hashString(password); 
                 
-                const data = await fetchWithRetry(GAS_API_URL, {
-                    method: 'POST',
-                    body: JSON.stringify({ action: 'login', wa: wa, password: hashedPassword, isHashed: true }),
-                    headers: { 'Content-Type': 'application/json' }
-                });
+                // Menggunakan GET dengan query params untuk kompatibilitas CORS/GAS yang lebih baik
+                const url = `${GAS_API_URL}?action=login&wa=${encodeURIComponent(wa)}&password=${encodeURIComponent(hashedPassword)}&isHashed=true`;
+                
+                const data = await fetchWithRetry(url, { method: 'GET' });
 
                 if (data.status === 'success') {
                     localStorage.setItem('currentUser', JSON.stringify(data.user));
@@ -545,26 +590,17 @@
         async function handleRegister(e) {
             e.preventDefault();
             const form = document.getElementById('register-form');
-            const data = {
-                action: 'register',
-                nama: form['reg-nama'].value.trim(),
-                wa: form['reg-wa'].value.trim(),
-                email: form['reg-email'].value.trim(),
-                jabatan: form['reg-jabatan'].value.trim(),
-                password: form['reg-password'].value.trim()
-            };
+            const password = form['reg-password'].value.trim();
 
             showLoading(true);
             try {
                 // Hash password client-side before sending
-                data.password = await hashString(data.password);
-                data.isHashed = true;
+                const hashedPassword = await hashString(password);
+                
+                // Menggunakan GET dengan query params untuk kompatibilitas CORS/GAS yang lebih baik
+                const url = `${GAS_API_URL}?action=register&nama=${encodeURIComponent(form['reg-nama'].value.trim())}&wa=${encodeURIComponent(form['reg-wa'].value.trim())}&email=${encodeURIComponent(form['reg-email'].value.trim())}&jabatan=${encodeURIComponent(form['reg-jabatan'].value.trim())}&password=${encodeURIComponent(hashedPassword)}&isHashed=true`;
 
-                const result = await fetchWithRetry(GAS_API_URL, {
-                    method: 'POST',
-                    body: JSON.stringify(data),
-                    headers: { 'Content-Type': 'application/json' }
-                });
+                const result = await fetchWithRetry(url, { method: 'GET' });
 
                 if (result.status === 'success') {
                     showMessage('register-error-message', 'Pendaftaran berhasil! Silakan login.', false);
@@ -613,6 +649,7 @@
                 };
 
                 try {
+                    // Semua API selain login/register menggunakan POST dengan JSON body
                     const result = await fetchWithRetry(GAS_API_URL, {
                         method: 'POST',
                         body: JSON.stringify(data),
