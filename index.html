@@ -131,6 +131,14 @@
                         } else {
                             result = { success: false, message: 'Email atau Password salah (Simulasi).' };
                         }
+                    } else if (action === 'ADMIN_LOGIN_PASSWORD') {
+                         // Simulasi Admin password check (Admin password default di Code.gs adalah 'rsud123')
+                        if (payload.password === 'rsud123') {
+                            // Simulasi login sebagai user admin tertinggi yang ada di simulasi
+                            result = { success: true, user: { id: 'USR-001', name: 'Dr. Andi Pratama (Admin)', role: 'Direktur', email: 'admin@rsud.com' } };
+                        } else {
+                            result = { success: false, message: 'Password Admin salah (Simulasi).' };
+                        }
                     } else if (action === 'GET_DATA') {
                         if (payload.sheetName === 'Surat') {
                             result = { success: true, data: [
@@ -354,13 +362,14 @@
                         </div>
                         <form id="loginForm" onsubmit="handleLogin(event)">
                             <div class="space-y-4">
+                                ${!isAdminMode ? `
+                                    <div>
+                                        <label for="username" class="block text-sm font-medium text-gray-700">Email</label>
+                                        <input type="email" id="username" name="username" required 
+                                            class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary transition duration-150">
+                                    </div>` : ''}
                                 <div>
-                                    <label for="username" class="block text-sm font-medium text-gray-700">Email</label>
-                                    <input type="email" id="username" name="username" required 
-                                           class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary transition duration-150">
-                                </div>
-                                <div>
-                                    <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
+                                    <label for="password" class="block text-sm font-medium text-gray-700">Password ${isAdminMode ? 'Admin' : ''}</label>
                                     <input type="password" id="password" name="password" required 
                                            class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary transition duration-150">
                                 </div>
@@ -387,13 +396,27 @@
         async function handleLogin(event) {
             event.preventDefault();
             const form = event.target;
-            const username = form.username.value;
             const password = form.password.value;
+            let payload;
+            let action;
 
-            // Simple client-side validation
-            if (!username || !password) {
-                setMessage('Harap isi Email dan Password.', 'error');
-                return;
+            if (state.isAdminMode) {
+                // Mode Admin: Hanya butuh password
+                if (!password) {
+                    setMessage('Harap isi Password Admin.', 'error');
+                    return;
+                }
+                action = 'ADMIN_LOGIN_PASSWORD';
+                payload = { action: action, password: password };
+            } else {
+                // Mode Normal: Butuh email dan password
+                const username = form.username.value;
+                if (!username || !password) {
+                    setMessage('Harap isi Email dan Password.', 'error');
+                    return;
+                }
+                action = 'LOGIN';
+                payload = { action: action, username: username, password: password };
             }
 
             try {
@@ -402,7 +425,7 @@
                 createIconsSafe();
                 button.disabled = true;
 
-                const response = await callGAS({ action: 'LOGIN', username, password });
+                const response = await callGAS(payload);
                 
                 if (response.success) {
                     const userRole = response.user.role;
@@ -410,6 +433,7 @@
                     if (state.isAdminMode && !ADMIN_ROLES.includes(userRole)) {
                         // Jika dalam mode Admin tapi user bukan Direktur/Kabag, tolak akses.
                         setMessage('Akses ditolak. Anda bukan pengguna Admin/Pimpinan.', 'error');
+                        // Ini seharusnya tidak terjadi jika ADMIN_LOGIN_PASSWORD berhasil
                     } else {
                         state.user = response.user;
                         state.isLoggedIn = true;
