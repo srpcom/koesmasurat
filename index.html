@@ -1,0 +1,1200 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistem Surat-Menyurat RSUD Koesma</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons CDN -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        /* Menggunakan font Inter secara default */
+        body { font-family: 'Inter', sans-serif; background-color: #f7f9fb; }
+        /* Style untuk transisi dan efek hover profesional */
+        .card-shadow { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.06); }
+        .nav-link.active { background-color: #d1e5ff; color: #1e40af; border-left: 4px solid #1e40af; }
+        /* Warna Primer RSUD Koesma (Biru) */
+        .bg-primary { background-color: #1e40af; }
+        .text-primary { color: #1e40af; }
+        .btn-primary { background-color: #3b82f6; border-radius: 0.5rem; transition: all 0.2s; }
+        .btn-primary:hover { background-color: #2563eb; transform: translateY(-1px); box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    </style>
+</head>
+<body>
+
+    <div id="app" class="min-h-screen">
+        <!-- Konten akan dimuat di sini (Login, Dashboard, Pages) -->
+    </div>
+
+    <!-- Script JavaScript Utama -->
+    <script>
+        // =========================================================================
+        // KONFIGURASI DAN INICIALISASI GLOBAL
+        // =========================================================================
+
+        // HARAP GANTI DENGAN URL WEB APP GOOGLE APPS SCRIPT YANG SUDAH DI-DEPLOY
+        // Menggunakan URL yang diminta oleh pengguna:
+        const GAS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwQvV3PoztdzPD4-eYznz_WKtUlNDRfLeyKPXKfxzqeLWhhdpyIa6QSFlXhMfpCuoU/exec'; 
+
+        let state = {
+            isLoggedIn: false,
+            user: null, // { id, name, role, email }
+            currentPage: 'Dashboard',
+            isAdminMode: false, // Tambahkan state untuk mode admin
+            suratList: [],
+            userList: [],
+            disposisiList: [],
+            logList: [],
+            isLoading: false,
+            message: null,
+            messageType: 'success'
+        };
+
+        const ROLES = ['Direktur', 'Kepala Bagian', 'Staf Administrasi', 'Staf Medis'];
+        const ADMIN_ROLES = ['Direktur', 'Kepala Bagian']; // Tentukan peran yang dianggap Admin
+
+        // =========================================================================
+        // API INTERFACE (MENGHUBUNGKAN KE GOOGLE APPS SCRIPT)
+        // =========================================================================
+
+        /**
+         * Panggilan API ke Google Apps Script dengan retry (Exponential Backoff).
+         * @param {Object} payload Data yang dikirim ke GAS (termasuk action).
+         * @param {number} retries Sisa upaya coba ulang.
+         */
+        async function callGAS(payload, retries = 3) {
+            // Cek jika endpoint adalah URL default placeholder yang tidak valid
+            if (GAS_ENDPOINT.includes('PASTE_YOUR') || !GAS_ENDPOINT.startsWith('http')) {
+                // Simulasi data jika endpoint belum diset/valid
+                console.error("GAS_ENDPOINT tidak valid. Menggunakan data simulasi.");
+                return simulateBackend(payload);
+            }
+            
+            const controller = new AbortController();
+            const signal = controller.signal;
+            // Tetapkan timeout 15 detik untuk setiap permintaan
+            const timeoutId = setTimeout(() => controller.abort(), 15000); 
+
+            try {
+                const response = await fetch(GAS_ENDPOINT, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                    signal: signal // Menambahkan sinyal AbortController
+                });
+
+                clearTimeout(timeoutId); // Hapus timeout jika berhasil
+
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                
+                return await response.json();
+
+            } catch (error) {
+                clearTimeout(timeoutId); // Hapus timeout jika gagal
+
+                let errorMessage = error.message;
+                if (error.name === 'AbortError') {
+                    errorMessage = 'Permintaan dibatalkan karena batas waktu (15 detik) tercapai.';
+                } else if (error.message === 'Failed to fetch') {
+                    errorMessage = 'Gagal terhubung ke jaringan atau server (periksa deployment GAS Anda).';
+                }
+
+                if (retries > 0) {
+                    const delay = Math.pow(2, 3 - retries) * 1000;
+                    console.warn(`GAS Call Gagal (${payload.action}). Mencoba ulang dalam ${delay / 1000}s. Error: ${errorMessage}`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    return callGAS(payload, retries - 1);
+                } else {
+                    console.error('GAS Call Gagal setelah beberapa kali mencoba.', error);
+                    setMessage(`Gagal terhubung ke Server (GAS) setelah percobaan berulang. Pesan: ${errorMessage}`, 'error');
+                    throw error;
+                }
+            }
+        }
+
+        /**
+         * Fungsi untuk menstimulasikan respons dari backend GAS.
+         * HANYA DIGUNAKAN UNTUK DEMO JIKA GAS_ENDPOINT BELUM DIISI.
+         */
+        function simulateBackend(payload) {
+            return new Promise(resolve => {
+                setTimeout(() => {
+                    let result;
+                    const action = payload.action;
+
+                    if (action === 'LOGIN') {
+                        if (payload.username === 'kabag@rsud.com' && payload.password === '123') {
+                            result = { success: true, user: { id: 'USR-001', name: 'Dr. Andi Pratama', role: 'Kepala Bagian', email: 'kabag@rsud.com' } };
+                        } else if (payload.username === 'staf@rsud.com' && payload.password === '123') {
+                            result = { success: true, user: { id: 'USR-002', name: 'Risa Dewi', role: 'Staf Administrasi', email: 'staf@rsud.com' } };
+                        } else {
+                            result = { success: false, message: 'Email atau Password salah (Simulasi).' };
+                        }
+                    } else if (action === 'GET_DATA') {
+                        if (payload.sheetName === 'Surat') {
+                            result = { success: true, data: [
+                                { ID: 'SRT-1', TglSurat: '2024-10-01', NoSurat: '123/RSUD/X/2024', Perihal: 'Undangan Rapat Mutu', Tipe: 'Masuk', AsalTujuan: 'Dinas Kesehatan', StatusDisposisi: 'Sudah Disposisi', LinkDrive: '#' },
+                                { ID: 'SRT-2', TglSurat: '2024-10-05', NoSurat: '124/RSUD/X/2024', Perihal: 'Laporan Keuangan Q3', Tipe: 'Keluar', AsalTujuan: 'BPK', StatusDisposisi: 'Sudah Disposisi', LinkDrive: '#' },
+                                { ID: 'SRT-3', TglSurat: '2024-10-10', NoSurat: '125/RSUD/X/2024', Perihal: 'Permintaan Data SDM', Tipe: 'Masuk', AsalTujuan: 'Kemenkes', StatusDisposisi: 'Belum Disposisi', LinkDrive: '#' },
+                            ]};
+                        } else if (payload.sheetName === 'User') {
+                            result = { success: true, data: [
+                                { ID: 'USR-001', NamaLengkap: 'Dr. Andi Pratama', Jabatan: 'Kepala Bagian', NomorWA: '62812xxxx', Email: 'kabag@rsud.com' },
+                                { ID: 'USR-002', NamaLengkap: 'Risa Dewi', Jabatan: 'Staf Administrasi', NomorWA: '62813xxxx', Email: 'staf@rsud.com' },
+                                { ID: 'USR-003', NamaLengkap: 'Budi Santoso', Jabatan: 'Staf Medis', NomorWA: '62814xxxx', Email: 'budi@rsud.com' },
+                            ]};
+                        } else if (payload.sheetName === 'Disposisi') {
+                             result = { success: true, data: [
+                                { SuratID: 'SRT-1', NoSurat: '123/RSUD/X/2024', Pengirim: 'Dr. Andi Pratama', Penerima: 'Risa Dewi', Instruksi: 'Tindak Lanjut Segera', TglDisposisi: '2024-10-01', StatusBaca: 'Sudah Dibaca', StatusTindakLanjut: 'Selesai' },
+                                { SuratID: 'SRT-3', NoSurat: '125/RSUD/X/2024', Pengirim: 'Dr. Andi Pratama', Penerima: 'Budi Santoso', Instruksi: 'Pelajari dan Laporkan', TglDisposisi: '2024-10-10', StatusBaca: 'Belum Dibaca', StatusTindakLanjut: 'Sedang Diproses' },
+                            ]};
+                        } else {
+                            result = { success: true, data: [] };
+                        }
+                    } else if (action === 'SAVE_SURAT') {
+                        const newSurat = { ...payload.suratData, ID: 'SRT-' + Date.now(), StatusDisposisi: 'Belum Disposisi', LinkDrive: '#SIMULASI_LINK_DRIVE' };
+                        state.suratList.push(newSurat);
+                        result = { success: true, message: 'Surat berhasil disimpan dan diarsip (Simulasi).', surat: newSurat };
+                    } else if (action === 'DISPOSISI') {
+                        // Simulasi update status surat
+                        const surat = state.suratList.find(s => s.ID === payload.suratId);
+                        if(surat) surat.StatusDisposisi = 'Sudah Disposisi';
+                        
+                        result = { success: true, message: 'Disposisi berhasil dibuat dan notifikasi dikirim (Simulasi). Silakan cek Log di GAS.' };
+                    } else if (action === 'REGISTER_USER') {
+                         const newUser = { ...payload.userData, ID: 'USR-' + Date.now(), PasswordHash: payload.userData.PasswordHash };
+                         state.userList.push(newUser);
+                         result = { success: true, message: 'Pendaftaran berhasil. Silakan login (Simulasi).' };
+                    }
+                    
+                    resolve(result);
+                }, 1000); // Delay 1 detik untuk simulasi loading
+            });
+        }
+        
+        // =========================================================================
+        // STATE MANAGEMENT & RENDERING
+        // =========================================================================
+        
+        /** Helper function for safe Lucide icon creation */
+        function createIconsSafe() {
+            if (typeof Lucide !== 'undefined' && Lucide.createIcons) {
+                Lucide.createIcons();
+            }
+        }
+        
+        /** Render ulang UI utama */
+        function render() {
+            const app = document.getElementById('app');
+            app.innerHTML = '';
+            
+            if (!state.isLoggedIn) {
+                // Gunakan state.isAdminMode untuk menentukan tampilan login
+                app.innerHTML = LoginPage(state.isAdminMode); 
+            } else {
+                app.innerHTML = MainLayout();
+                renderPageContent(state.currentPage);
+            }
+        }
+        
+        /** Render konten halaman spesifik di Main Layout */
+        function renderPageContent(page) {
+            const contentDiv = document.getElementById('main-content');
+            if (!contentDiv) return;
+
+            // Bersihkan konten lama
+            contentDiv.innerHTML = `<div class="p-8 flex items-center justify-center h-full">
+                                        <div class="flex items-center space-x-2 text-primary">
+                                            <svg class="animate-spin h-5 w-5" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                            <span>Memuat data...</span>
+                                        </div>
+                                    </div>`;
+            state.isLoading = true;
+            
+            // Logika pemanggilan data
+            Promise.all([
+                callGAS({ action: 'GET_DATA', sheetName: 'Surat' }),
+                callGAS({ action: 'GET_DATA', sheetName: 'User' }),
+                callGAS({ action: 'GET_DATA', sheetName: 'Disposisi' }),
+                callGAS({ action: 'GET_DATA', sheetName: 'Log' })
+            ]).then(([suratRes, userRes, disposisiRes, logRes]) => {
+                state.suratList = suratRes.success ? suratRes.data : [];
+                state.userList = userRes.success ? userRes.data : [];
+                state.disposisiList = disposisiRes.success ? disposisiRes.data : [];
+                state.logList = logRes.success ? logRes.data : [];
+                
+                contentDiv.innerHTML = getPageContent(page);
+            }).catch(e => {
+                contentDiv.innerHTML = `<div class="p-8 text-red-600">Gagal memuat data utama: ${e.message}</div>`;
+                console.error("Error loading all data:", e);
+            }).finally(() => {
+                 state.isLoading = false;
+                 createIconsSafe(); // Re-inisialisasi ikon setelah konten dimuat
+            });
+        }
+
+        /** Pindah halaman */
+        function navigate(page) {
+            state.currentPage = page;
+            render();
+        }
+
+        /** Tampilkan pesan notifikasi */
+        function setMessage(text, type = 'success') {
+            state.message = text;
+            state.messageType = type;
+            render();
+            setTimeout(() => {
+                state.message = null;
+                render();
+            }, 5000);
+        }
+
+        // =========================================================================
+        // KOMPONEN UI UTAMA
+        // =========================================================================
+
+        const MainLayout = () => {
+            const isUserAdmin = ADMIN_ROLES.includes(state.user.role);
+
+            return `
+                <div class="flex min-h-screen bg-gray-50">
+                    <!-- Sidebar (Mobile Hidden, Desktop Flex) -->
+                    <div id="sidebar" class="fixed inset-y-0 left-0 transform -translate-x-full md:relative md:translate-x-0 transition duration-200 ease-in-out bg-white w-64 p-4 flex flex-col z-20 border-r shadow-lg">
+                        <div class="flex-shrink-0 flex items-center mb-6 border-b pb-4">
+                            <span class="text-xl font-bold text-primary">RSUD dr. R. Koesma</span>
+                            ${state.isAdminMode ? '<span class="ml-2 text-xs bg-red-500 text-white px-2 py-0.5 rounded-full font-semibold">ADMIN MODE</span>' : ''}
+                        </div>
+                        <nav class="flex-grow space-y-2">
+                            ${SidebarItem('Dashboard', 'layout-dashboard')}
+                            ${SidebarItem('Surat Masuk', 'mail')}
+                            ${SidebarItem('Surat Keluar', 'send')}
+                            ${SidebarItem('Disposisi', 'clipboard-list')}
+                            ${SidebarItem('Arsip', 'folder')}
+                            ${isUserAdmin || state.isAdminMode ? SidebarItem('Manajemen User', 'users') : ''}
+                            ${isUserAdmin || state.isAdminMode ? SidebarItem('Log Aktivitas', 'history') : ''}
+                        </nav>
+                        <div class="mt-auto pt-4 border-t">
+                            <button onclick="logout()" class="w-full flex items-center p-3 text-sm font-medium text-gray-700 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors">
+                                <i data-lucide="log-out" class="w-5 h-5 mr-3"></i>
+                                Keluar
+                            </button>
+                            <p class="text-xs text-gray-500 mt-2">
+                                User: ${state.user.name} (${state.user.role})
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <!-- Main Content -->
+                    <div class="flex-1 flex flex-col overflow-hidden">
+                        <!-- Header / Top Bar -->
+                        <header class="bg-white shadow-md p-4 flex justify-between items-center z-10">
+                            <div class="flex items-center">
+                                <button onclick="toggleSidebar()" class="md:hidden p-2 rounded-lg text-gray-600 hover:bg-gray-100 mr-3">
+                                    <i data-lucide="menu" class="w-6 h-6"></i>
+                                </button>
+                                <h1 class="text-2xl font-semibold text-gray-800">${state.currentPage}</h1>
+                            </div>
+                            <!-- Notifikasi Placeholder -->
+                            <div class="relative">
+                                <button class="p-2 rounded-full text-gray-600 hover:bg-gray-100">
+                                    <i data-lucide="bell" class="w-6 h-6"></i>
+                                    <span class="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>
+                                </button>
+                            </div>
+                        </header>
+
+                        <!-- Content Area -->
+                        <main id="main-content" class="flex-1 overflow-x-hidden overflow-y-auto p-4 md:p-6 lg:p-8">
+                            <!-- Konten spesifik akan dimuat di sini -->
+                        </main>
+
+                        ${NotificationToast()}
+                    </div>
+                </div>
+            `;
+        };
+
+        const SidebarItem = (title, icon) => {
+            const isActive = state.currentPage === title;
+            return `
+                <a href="#" onclick="navigate('${title}')" class="nav-link flex items-center p-3 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors ${isActive ? 'active' : ''}">
+                    <i data-lucide="${icon}" class="w-5 h-5 mr-3"></i>
+                    ${title}
+                </a>
+            `;
+        };
+
+        const NotificationToast = () => {
+            if (!state.message) return '';
+            const bgColor = state.messageType === 'success' ? 'bg-green-500' : 'bg-red-500';
+            const icon = state.messageType === 'success' ? 'check-circle' : 'alert-triangle';
+
+            return `
+                <div class="fixed bottom-4 right-4 z-50 p-4 rounded-lg text-white ${bgColor} shadow-xl flex items-center transition-opacity duration-300">
+                    <i data-lucide="${icon}" class="w-5 h-5 mr-2"></i>
+                    <span>${state.message}</span>
+                </div>
+            `;
+        };
+        
+        // =========================================================================
+        // AUTHENTICATION LOGIC
+        // =========================================================================
+
+        const LoginPage = (isAdminMode) => {
+            return `
+                <div class="flex min-h-screen items-center justify-center bg-gray-100 p-4">
+                    <div class="w-full max-w-md bg-white rounded-xl p-8 shadow-2xl card-shadow">
+                        <div class="text-center mb-8">
+                            <i data-lucide="mail-check" class="w-12 h-12 text-primary mx-auto mb-2"></i>
+                            <h2 class="text-3xl font-bold text-gray-900">Selamat Datang</h2>
+                            <p class="text-gray-500">${isAdminMode ? 'Mode Admin/Pimpinan' : 'Sistem Surat-Menyurat RSUD Koesma'}</p>
+                        </div>
+                        <form id="loginForm" onsubmit="handleLogin(event)">
+                            <div class="space-y-4">
+                                <div>
+                                    <label for="username" class="block text-sm font-medium text-gray-700">Email</label>
+                                    <input type="email" id="username" name="username" required 
+                                           class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary transition duration-150">
+                                </div>
+                                <div>
+                                    <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
+                                    <input type="password" id="password" name="password" required 
+                                           class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary transition duration-150">
+                                </div>
+                            </div>
+                            <button type="submit" class="w-full mt-6 btn-primary text-white py-2.5 font-semibold">
+                                ${isAdminMode ? 'Masuk (Admin)' : 'Masuk'}
+                            </button>
+                        </form>
+                        <p class="mt-6 text-center text-sm">
+                            ${!isAdminMode ? 
+                                `Belum punya akun? <a href="#" onclick="showRegisterModal()" class="text-primary hover:text-blue-700 font-medium">Daftar Sekarang</a>`
+                                :
+                                `<a href="#default" onclick="window.location.hash='#default'; render()" class="text-gray-500 hover:text-gray-700 font-medium">Kembali ke Login Normal</a>`
+                            }
+                        </p>
+                    </div>
+                    ${RegisterModal()}
+                    ${NotificationToast()}
+                </div>
+            `;
+        };
+        
+        /** Handler untuk login */
+        async function handleLogin(event) {
+            event.preventDefault();
+            const form = event.target;
+            const username = form.username.value;
+            const password = form.password.value;
+
+            // Simple client-side validation
+            if (!username || !password) {
+                setMessage('Harap isi Email dan Password.', 'error');
+                return;
+            }
+
+            try {
+                const button = form.querySelector('button');
+                button.innerHTML = '<i data-lucide="loader-2" class="w-5 h-5 animate-spin mr-2"></i> Memproses...';
+                createIconsSafe();
+                button.disabled = true;
+
+                const response = await callGAS({ action: 'LOGIN', username, password });
+                
+                if (response.success) {
+                    const userRole = response.user.role;
+                    
+                    if (state.isAdminMode && !ADMIN_ROLES.includes(userRole)) {
+                        // Jika dalam mode Admin tapi user bukan Direktur/Kabag, tolak akses.
+                        setMessage('Akses ditolak. Anda bukan pengguna Admin/Pimpinan.', 'error');
+                    } else {
+                        state.user = response.user;
+                        state.isLoggedIn = true;
+                        setMessage('Login berhasil. Selamat datang, ' + state.user.name + '!', 'success');
+                        
+                        // Arahkan admin ke halaman Manajemen User setelah login di mode admin
+                        if (state.isAdminMode) {
+                            navigate('Manajemen User');
+                        } else {
+                            navigate('Dashboard');
+                        }
+                    }
+                } else {
+                    setMessage(response.message, 'error');
+                }
+            } catch (error) {
+                setMessage('Terjadi kesalahan saat mencoba login.', 'error');
+            } finally {
+                const button = form.querySelector('button');
+                button.innerHTML = state.isAdminMode ? 'Masuk (Admin)' : 'Masuk';
+                button.disabled = false;
+            }
+        }
+        
+        /** Logout */
+        function logout() {
+            state.isLoggedIn = false;
+            state.user = null;
+            state.currentPage = 'Dashboard';
+            // Reset hash ke default saat logout
+            window.location.hash = '#default'; 
+            state.isAdminMode = false;
+            setMessage('Anda telah keluar dari sistem.', 'success');
+            render();
+        }
+
+        // =========================================================================
+        // PAGE CONTENT (Dashboard, Surat, Disposisi, etc.)
+        // =========================================================================
+        
+        // --- 1. DASHBOARD ---
+        const getDashboardContent = () => {
+            const today = new Date();
+            const currentMonth = today.getMonth();
+            const currentYear = today.getFullYear();
+            
+            const suratBulanIni = state.suratList.filter(s => {
+                const sDate = new Date(s.TglSurat);
+                return sDate.getMonth() === currentMonth && sDate.getFullYear() === currentYear;
+            }).length;
+
+            const belumDisposisi = state.suratList.filter(s => s.Tipe === 'Masuk' && s.StatusDisposisi === 'Belum Disposisi').length;
+            const belumDitindaklanjuti = state.disposisiList.filter(d => 
+                d.Penerima === state.user.name && 
+                d.StatusTindakLanjut === 'Sedang Diproses'
+            ).length;
+
+            return `
+                <div class="space-y-8">
+                    <h2 class="text-xl font-bold text-gray-700">Ringkasan Bulan Ini</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        ${StatCard('Surat Masuk Bulan Ini', suratBulanIni, 'mail', 'bg-blue-100', 'text-blue-600')}
+                        ${StatCard('Belum Didisposisi (Masuk)', belumDisposisi, 'alert-triangle', 'bg-red-100', 'text-red-600')}
+                        ${StatCard('Perlu Ditindaklanjuti', belumDitindaklanjuti, 'clipboard-check', 'bg-green-100', 'text-green-600')}
+                    </div>
+
+                    <h2 class="text-xl font-bold text-gray-700 pt-4 border-t">Aktivitas Disposisi Saya</h2>
+                    <div class="bg-white p-6 rounded-xl card-shadow overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">No. Surat</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Perihal</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Pengirim</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status Baca</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tindak Lanjut</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">
+                                ${state.disposisiList.filter(d => d.Penerima === state.user.name)
+                                    .slice(0, 5) // Tampilkan 5 terbaru
+                                    .map(d => `
+                                        <tr class="hover:bg-gray-50">
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${d.NoSurat}</td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${d.SuratID}</td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${d.Pengirim}</td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm">
+                                                <span class="${d.StatusBaca === 'Sudah Dibaca' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'} px-2 py-0.5 rounded-full text-xs font-medium">
+                                                    ${d.StatusBaca}
+                                                </span>
+                                            </td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm">
+                                                <span class="${d.StatusTindakLanjut === 'Selesai' ? 'bg-blue-100 text-blue-800' : 'bg-orange-100 text-orange-800'} px-2 py-0.5 rounded-full text-xs font-medium">
+                                                    ${d.StatusTindakLanjut}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    `).join('')}
+                            </tbody>
+                        </table>
+                        ${state.disposisiList.filter(d => d.Penerima === state.user.name).length === 0 ? '<p class="text-center text-gray-500 py-6">Tidak ada disposisi untuk Anda.</p>' : ''}
+                    </div>
+                </div>
+            `;
+        };
+        
+        const StatCard = (title, value, icon, iconBg, iconColor) => {
+            return `
+                <div class="bg-white p-6 rounded-xl card-shadow flex items-center space-x-4">
+                    <div class="p-3 rounded-full ${iconBg} ${iconColor}">
+                        <i data-lucide="${icon}" class="w-6 h-6"></i>
+                    </div>
+                    <div>
+                        <p class="text-sm font-medium text-gray-500">${title}</p>
+                        <p class="text-3xl font-bold text-gray-900">${value}</p>
+                    </div>
+                </div>
+            `;
+        };
+
+        // --- 2. SURAT MASUK/KELUAR (Satu komponen dengan filter) ---
+        const getSuratPageContent = (type) => {
+            const isMasuk = type === 'Surat Masuk';
+            const filteredSurat = state.suratList.filter(s => s.Tipe === (isMasuk ? 'Masuk' : 'Keluar'));
+            const isPimpinan = ADMIN_ROLES.includes(state.user.role);
+
+            return `
+                <div class="space-y-6">
+                    ${isMasuk ? SuratForm('Masuk') : SuratForm('Keluar')}
+                    
+                    <div class="bg-white p-6 rounded-xl card-shadow">
+                        <h3 class="text-xl font-semibold mb-4">${type} (${filteredSurat.length} Surat)</h3>
+                        <div class="mb-4">
+                            <input type="text" id="searchSurat" onkeyup="filterSurat('${isMasuk ? 'Masuk' : 'Keluar'}')" placeholder="Cari No. Surat atau Perihal..." 
+                                   class="w-full md:w-1/3 px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary">
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="min-w-full divide-y divide-gray-200" id="suratTable">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tgl Surat</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">No. Surat</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Perihal</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">${isMasuk ? 'Asal' : 'Tujuan'}</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Aksi</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-200">
+                                    ${filteredSurat.map(s => `
+                                        <tr class="hover:bg-gray-50" data-search="${s.NoSurat} ${s.Perihal}">
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${s.TglSurat}</td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${s.NoSurat}</td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">${s.Perihal}</td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${s.AsalTujuan}</td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm">
+                                                <span class="${s.StatusDisposisi === 'Sudah Disposisi' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'} px-2 py-0.5 rounded-full text-xs font-medium">
+                                                    ${s.StatusDisposisi}
+                                                </span>
+                                            </td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
+                                                <a href="${s.LinkDrive}" target="_blank" class="text-primary hover:text-blue-700" title="Lihat File">
+                                                    <i data-lucide="file-text" class="w-5 h-5 inline-block"></i>
+                                                </a>
+                                                ${isMasuk && isPimpinan ? 
+                                                    `<button onclick="showDisposisiModal('${s.ID}')" class="text-orange-500 hover:text-orange-700" title="Disposisi">
+                                                        <i data-lucide="send" class="w-5 h-5 inline-block"></i>
+                                                    </button>` : ''}
+                                            </td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                ${DisposisiModal()}
+            `;
+        };
+
+        const SuratForm = (type) => {
+            return `
+                <div class="bg-white p-6 rounded-xl card-shadow">
+                    <h3 class="text-xl font-semibold mb-4">Input Surat ${type}</h3>
+                    <form id="suratForm${type}" onsubmit="handleSaveSurat(event, '${type}')" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Tanggal Surat</label>
+                            <input type="date" name="TglSurat" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-primary focus:border-primary">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Nomor Surat</label>
+                            <input type="text" name="NoSurat" required placeholder="Ex: 123/RSUD/X/2024" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-primary focus:border-primary">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Perihal</label>
+                            <input type="text" name="Perihal" required placeholder="Ex: Undangan Rapat..." class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-primary focus:border-primary">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">${type === 'Masuk' ? 'Asal Surat' : 'Tujuan Surat'}</label>
+                            <input type="text" name="AsalTujuan" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-primary focus:border-primary">
+                        </div>
+                        <div class="col-span-1 md:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700">File Surat (PDF/JPG/PNG)</label>
+                            <input type="file" id="fileSurat" name="File" required accept=".pdf,.jpg,.jpeg,.png" class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-white hover:file:bg-blue-700">
+                        </div>
+                        <div class="col-span-1 md:col-span-2 pt-2">
+                            <button type="submit" class="w-full btn-primary text-white py-2.5 font-semibold">
+                                <i data-lucide="save" class="w-5 h-5 inline-block mr-2"></i>
+                                Simpan Surat
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            `;
+        };
+
+        /** Handler Simpan Surat */
+        async function handleSaveSurat(event, type) {
+            event.preventDefault();
+            const form = event.target;
+            const fileInput = form.File;
+            const button = form.querySelector('button');
+
+            if (fileInput.files.length === 0) {
+                setMessage('Harap pilih file surat.', 'error');
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+
+            reader.onload = async function (event) {
+                const base64Data = event.target.result.split(',')[1];
+                const suratData = {
+                    Tipe: type,
+                    TglSurat: form.TglSurat.value,
+                    NoSurat: form.NoSurat.value,
+                    Perihal: form.Perihal.value,
+                    AsalTujuan: form.AsalTujuan.value,
+                    Penginput: state.user.name,
+                };
+
+                try {
+                    button.innerHTML = '<i data-lucide="loader-2" class="w-5 h-5 animate-spin mr-2"></i> Mengunggah...';
+                    createIconsSafe();
+                    button.disabled = true;
+
+                    const response = await callGAS({
+                        action: 'SAVE_SURAT',
+                        suratData: suratData,
+                        fileBase64: base64Data,
+                        fileName: file.name
+                    });
+
+                    if (response.success) {
+                        setMessage(response.message, 'success');
+                        form.reset();
+                        renderPageContent(state.currentPage); // Refresh list
+                    } else {
+                        setMessage(response.message, 'error');
+                    }
+                } catch (error) {
+                    setMessage('Gagal menyimpan dan mengunggah surat.', 'error');
+                } finally {
+                    button.innerHTML = '<i data-lucide="save" class="w-5 h-5 inline-block mr-2"></i> Simpan Surat';
+                    button.disabled = false;
+                }
+            };
+            reader.readAsDataURL(file);
+        }
+        
+        /** Filter Surat (Pencarian) */
+        function filterSurat(type) {
+            const input = document.getElementById('searchSurat');
+            const filter = input.value.toUpperCase();
+            const table = document.getElementById('suratTable');
+            const tr = table.getElementsByTagName('tr');
+
+            for (let i = 1; i < tr.length; i++) {
+                const searchData = tr[i].getAttribute('data-search');
+                if (searchData) {
+                    if (searchData.toUpperCase().indexOf(filter) > -1) {
+                        tr[i].style.display = "";
+                    } else {
+                        tr[i].style.display = "none";
+                    }
+                }       
+            }
+        }
+
+
+        // --- 3. DISPOSISI ---
+        const DisposisiModal = () => {
+            return `
+                <div id="disposisiModal" class="fixed inset-0 bg-gray-900 bg-opacity-75 hidden items-center justify-center z-50 p-4" onclick="hideDisposisiModal(event)">
+                    <div class="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6 transform transition-all" onclick="event.stopPropagation()">
+                        <h3 class="text-2xl font-bold mb-4 text-primary">Disposisi Surat</h3>
+                        <form id="disposisiForm" onsubmit="handleDisposisi(event)">
+                            <input type="hidden" id="disposisiSuratId">
+                            <div class="mb-4">
+                                <label class="block text-sm font-medium text-gray-700">Surat: <span id="disposisiNoSurat" class="font-semibold text-gray-900"></span></label>
+                            </div>
+                            
+                            <div class="mb-4 space-y-3" id="recipientListContainer">
+                                <label class="block text-sm font-medium text-gray-700">Pilih Penerima (WA & Telegram)</label>
+                                <!-- Daftar penerima akan dimuat di sini -->
+                            </div>
+
+                            <button type="submit" class="w-full mt-4 btn-primary text-white py-2.5 font-semibold">
+                                Kirim Disposisi & Notifikasi
+                            </button>
+                            <button type="button" onclick="hideDisposisiModal()" class="w-full mt-2 bg-gray-200 text-gray-700 py-2.5 font-semibold rounded-lg hover:bg-gray-300">
+                                Batal
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            `;
+        };
+
+        function showDisposisiModal(suratId) {
+            const modal = document.getElementById('disposisiModal');
+            const surat = state.suratList.find(s => s.ID === suratId);
+            
+            if (!surat) return setMessage('Surat tidak ditemukan.', 'error');
+            
+            document.getElementById('disposisiSuratId').value = suratId;
+            document.getElementById('disposisiNoSurat').textContent = `${surat.NoSurat} - ${surat.Perihal}`;
+
+            const recipientContainer = document.getElementById('recipientListContainer');
+            recipientContainer.innerHTML = ''; // Clear existing
+
+            state.userList.forEach(u => {
+                if (u.ID !== state.user.id) {
+                    recipientContainer.innerHTML += `
+                        <div class="bg-gray-50 p-3 rounded-lg border flex flex-col space-y-2">
+                            <div class="flex items-center space-x-3">
+                                <input type="checkbox" id="user-${u.ID}" name="recipientId" value="${u.ID}" class="h-4 w-4 text-primary rounded border-gray-300 focus:ring-primary">
+                                <label for="user-${u.ID}" class="font-medium text-gray-900">${u.NamaLengkap} <span class="text-sm text-gray-500">(${u.Jabatan})</span></label>
+                            </div>
+                            <textarea name="instruction-${u.ID}" rows="2" placeholder="Instruksi spesifik untuk ${u.NamaLengkap}" class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-primary focus:border-primary"></textarea>
+                        </div>
+                    `;
+                }
+            });
+
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            createIconsSafe();
+        }
+
+        function hideDisposisiModal(event = null) {
+            if (event && event.target.id !== 'disposisiModal') return;
+            document.getElementById('disposisiModal').classList.remove('flex');
+            document.getElementById('disposisiModal').classList.add('hidden');
+        }
+
+        async function handleDisposisi(event) {
+            event.preventDefault();
+            const form = event.target;
+            const suratId = form.disposisiSuratId.value;
+            const checkedRecipients = Array.from(form.querySelectorAll('input[name="recipientId"]:checked'));
+
+            if (checkedRecipients.length === 0) {
+                setMessage('Pilih minimal satu penerima disposisi.', 'error');
+                return;
+            }
+
+            const recipients = checkedRecipients.map(input => {
+                const id = input.value;
+                const instruction = form.querySelector(`textarea[name="instruction-${id}"]`).value || 'Mohon segera tindak lanjuti.';
+                return { id, instruction };
+            });
+
+            try {
+                const button = form.querySelector('button[type="submit"]');
+                button.innerHTML = '<i data-lucide="loader-2" class="w-5 h-5 animate-spin mr-2"></i> Mengirim...';
+                createIconsSafe();
+                button.disabled = true;
+
+                const response = await callGAS({
+                    action: 'DISPOSISI',
+                    suratId,
+                    senderId: state.user.id,
+                    recipients
+                });
+
+                if (response.success) {
+                    setMessage(response.message, 'success');
+                    hideDisposisiModal();
+                    renderPageContent('Surat Masuk'); // Refresh list
+                } else {
+                    setMessage(response.message, 'error');
+                }
+            } catch (error) {
+                setMessage('Gagal mengirim disposisi.', 'error');
+            } finally {
+                const button = form.querySelector('button[type="submit"]');
+                button.innerHTML = 'Kirim Disposisi & Notifikasi';
+                button.disabled = false;
+            }
+        }
+
+        // --- 4. MANAJEMEN USER ---
+        const getUserManagementContent = () => {
+            return `
+                <div class="space-y-6">
+                    ${UserRegistrationForm()}
+                    <div class="bg-white p-6 rounded-xl card-shadow">
+                        <h3 class="text-xl font-semibold mb-4">Daftar Pengguna (${state.userList.length})</h3>
+                        <div class="overflow-x-auto">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nama</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Jabatan</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">WA</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Aksi (Admin)</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-200">
+                                    ${state.userList.map(u => `
+                                        <tr class="hover:bg-gray-50">
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${u.NamaLengkap}</td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">${u.Jabatan}</td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${u.NomorWA}</td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${u.Email}</td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm space-x-2">
+                                                <button onclick="handleResetPassword('${u.ID}', '${u.NamaLengkap}')" class="text-red-500 hover:text-red-700" title="Reset Password">
+                                                    <i data-lucide="key-round" class="w-5 h-5 inline-block"></i>
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
+        const RegisterModal = () => {
+            const roleOptions = ROLES.map(role => `<option value="${role}">${role}</option>`).join('');
+
+            return `
+                <div id="registerModal" class="fixed inset-0 bg-gray-900 bg-opacity-75 hidden items-center justify-center z-50 p-4" onclick="hideRegisterModal(event)">
+                    <div class="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6 transform transition-all" onclick="event.stopPropagation()">
+                        <h3 class="text-2xl font-bold mb-4 text-primary">Pendaftaran User Baru</h3>
+                        <form id="registerForm" onsubmit="handleRegistration(event)">
+                            <div class="space-y-4">
+                                <div><label class="block text-sm font-medium text-gray-700">Nama Lengkap</label><input type="text" name="NamaLengkap" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg"></div>
+                                <div><label class="block text-sm font-medium text-gray-700">Email (Username)</label><input type="email" name="Email" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg"></div>
+                                <div><label class="block text-sm font-medium text-gray-700">Password</label><input type="password" name="PasswordHash" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg"></div>
+                                <div><label class="block text-sm font-medium text-gray-700">Nomor WA (Ex: 62812...)</label><input type="tel" name="NomorWA" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg"></div>
+                                <div><label class="block text-sm font-medium text-gray-700">Jabatan</label>
+                                    <select name="Jabatan" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg">
+                                        ${roleOptions}
+                                    </select>
+                                </div>
+                            </div>
+                            <button type="submit" class="w-full mt-6 btn-primary text-white py-2.5 font-semibold">
+                                Daftar
+                            </button>
+                            <button type="button" onclick="hideRegisterModal()" class="w-full mt-2 bg-gray-200 text-gray-700 py-2.5 font-semibold rounded-lg hover:bg-gray-300">
+                                Kembali ke Login
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            `;
+        };
+        
+        const UserRegistrationForm = () => {
+             // Re-use the modal structure for in-app registration (Admin view)
+            return `
+                <div class="bg-white p-6 rounded-xl card-shadow">
+                    <h3 class="text-xl font-semibold mb-4">Tambah User Baru</h3>
+                    <button onclick="showRegisterModal(true)" class="btn-primary text-white py-2 px-4 font-semibold rounded-lg flex items-center">
+                        <i data-lucide="user-plus" class="w-5 h-5 mr-2"></i> Tambah User
+                    </button>
+                </div>
+            `;
+        };
+
+        function showRegisterModal(isAdmin = false) {
+             const modal = document.getElementById('registerModal');
+             modal.classList.remove('hidden');
+             modal.classList.add('flex');
+             // Jika dipanggil dari halaman login, sembunyikan tombol kembali ke login jika di mode admin
+             const backButton = modal.querySelector('button[onclick="hideRegisterModal()"]');
+             if (backButton) backButton.style.display = isAdmin ? 'none' : 'block';
+             
+             // Reset form
+             document.getElementById('registerForm').reset();
+             createIconsSafe();
+        }
+
+        function hideRegisterModal(event = null) {
+            if (event && event.target.id !== 'registerModal') return;
+            document.getElementById('registerModal').classList.remove('flex');
+            document.getElementById('registerModal').classList.add('hidden');
+        }
+
+        async function handleRegistration(event) {
+            event.preventDefault();
+            const form = event.target;
+            const button = form.querySelector('button[type="submit"]');
+
+            const userData = {
+                NamaLengkap: form.NamaLengkap.value,
+                Email: form.Email.value,
+                PasswordHash: form.PasswordHash.value, // Catatan: Harusnya di-hash
+                NomorWA: form.NomorWA.value,
+                Jabatan: form.Jabatan.value,
+                TelegramID: 'BELUM_ADA' // Placeholder
+            };
+
+            try {
+                button.innerHTML = '<i data-lucide="loader-2" class="w-5 h-5 animate-spin mr-2"></i> Mendaftar...';
+                createIconsSafe();
+                button.disabled = true;
+
+                const response = await callGAS({ action: 'REGISTER_USER', userData });
+
+                if (response.success) {
+                    setMessage(response.message, 'success');
+                    hideRegisterModal();
+                    // Jika admin yang mendaftarkan, refresh list
+                    if (state.isLoggedIn) renderPageContent(state.currentPage);
+                } else {
+                    setMessage(response.message, 'error');
+                }
+            } catch (error) {
+                setMessage('Gagal memproses pendaftaran.', 'error');
+            } finally {
+                button.innerHTML = 'Daftar';
+                button.disabled = false;
+            }
+        }
+        
+        function handleResetPassword(userId, userName) {
+            // Pengganti alert()
+            if (window.confirm(`Yakin ingin mereset password untuk ${userName}? Ini akan mengirimkan password sementara (misalnya 'rsud123') ke email admin (Admin harus implementasi fitur kirim email di GAS).`)) {
+                // Implementasi Reset Password (Panggilan GAS)
+                // callGAS({ action: 'RESET_PASSWORD', userId });
+                setMessage(`Permintaan reset password untuk ${userName} sudah diproses. Admin harus mengecek Sheet 'Log' dan menjalankan logika kirim notifikasi/email di GAS.`, 'success');
+            }
+        }
+        
+        // --- 5. LOG AKTIVITAS ---
+        const getLogContent = () => {
+            return `
+                <div class="bg-white p-6 rounded-xl card-shadow">
+                    <h3 class="text-xl font-semibold mb-4">Log Aktivitas Aplikasi (${state.logList.length} Entri)</h3>
+                    <div class="overflow-x-auto h-96 overflow-y-scroll border rounded-lg">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50 sticky top-0">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Waktu</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tipe</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Detail</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">
+                                ${state.logList.map(log => `
+                                    <tr class="${log.Tipe === 'ERROR' ? 'bg-red-50' : 'hover:bg-gray-50'}">
+                                        <td class="px-6 py-3 whitespace-nowrap text-xs text-gray-500">${new Date(log.Waktu).toLocaleString()}</td>
+                                        <td class="px-6 py-3 whitespace-nowrap text-sm font-medium ${log.Tipe === 'ERROR' ? 'text-red-700' : 'text-gray-900'}">${log.Tipe}</td>
+                                        <td class="px-6 py-3 text-xs text-gray-500 max-w-lg truncate">${log.Detail}</td>
+                                    </tr>
+                                `).reverse().join('')} 
+                                <!-- Reverse untuk menampilkan terbaru di atas -->
+                            </tbody>
+                        </table>
+                        ${state.logList.length === 0 ? '<p class="text-center text-gray-500 py-6">Tidak ada log aktivitas.</p>' : ''}
+                    </div>
+                </div>
+            `;
+        };
+        
+        // --- Halaman Generik (Disposisi List & Arsip) ---
+        
+        const getDisposisiListContent = () => {
+            const myDisposisi = state.disposisiList.filter(d => d.Penerima === state.user.name);
+
+            return `
+                <div class="bg-white p-6 rounded-xl card-shadow">
+                    <h3 class="text-xl font-semibold mb-4">Daftar Disposisi Untuk Saya (${myDisposisi.length})</h3>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tgl Disposisi</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">No. Surat</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Pengirim</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Instruksi</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Aksi</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">
+                                ${myDisposisi.map(d => {
+                                    const surat = state.suratList.find(s => s.ID === d.SuratID);
+                                    return `
+                                        <tr class="hover:bg-gray-50">
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${new Date(d.TglDisposisi).toLocaleDateString()}</td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${d.NoSurat}</td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${d.Pengirim}</td>
+                                            <td class="px-6 py-4 text-sm text-gray-700 max-w-xs">${d.Instruksi}</td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm">
+                                                <span class="${d.StatusTindakLanjut === 'Selesai' ? 'bg-blue-100 text-blue-800' : 'bg-orange-100 text-orange-800'} px-2 py-0.5 rounded-full text-xs font-medium">
+                                                    ${d.StatusTindakLanjut}
+                                                </span>
+                                            </td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm space-x-2">
+                                                <a href="${surat ? surat.LinkDrive : '#'}" target="_blank" onclick="handleReadStatus('${d.SuratID}', 'Sudah Dibaca')" class="text-primary hover:text-blue-700" title="Lihat & Tandai Dibaca">
+                                                    <i data-lucide="eye" class="w-5 h-5 inline-block"></i>
+                                                </a>
+                                                ${d.StatusTindakLanjut !== 'Selesai' ? `
+                                                    <button onclick="handleCompleteTask('${d.SuratID}')" class="text-green-500 hover:text-green-700" title="Tandai Selesai">
+                                                        <i data-lucide="check-circle" class="w-5 h-5 inline-block"></i>
+                                                    </button>` : ''}
+                                            </td>
+                                        </tr>
+                                    `;
+                                }).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+        
+        async function handleReadStatus(suratId, status) {
+            // Simulasi update status Baca
+            const disposisi = state.disposisiList.find(d => d.SuratID === suratId && d.Penerima === state.user.name);
+            if (disposisi && disposisi.StatusBaca !== status) {
+                // Panggilan GAS untuk update status baca
+                const response = await callGAS({
+                    action: 'UPDATE_STATUS',
+                    sheetName: 'Disposisi',
+                    id: disposisi.SuratID, // Seharusnya menggunakan ID Disposisi yang unik, tapi di sini pakai SuratID untuk simplifikasi
+                    field: 'StatusBaca',
+                    value: status
+                });
+                if (response.success) {
+                    setMessage(`Status surat ${suratId} ditandai sebagai ${status}.`, 'success');
+                    renderPageContent(state.currentPage);
+                } else {
+                    setMessage(response.message, 'error');
+                }
+            }
+        }
+        
+        async function handleCompleteTask(suratId) {
+            // Panggil GAS untuk update Status Tindak Lanjut
+            const disposisi = state.disposisiList.find(d => d.SuratID === suratId && d.Penerima === state.user.name);
+            if (disposisi) {
+                if (window.confirm(`Yakin ingin menandai disposisi surat ${disposisi.NoSurat} ini sebagai 'Selesai'?`)) {
+                    const response = await callGAS({
+                        action: 'UPDATE_STATUS',
+                        sheetName: 'Disposisi',
+                        id: disposisi.SuratID, // Seharusnya ID Disposisi
+                        field: 'StatusTindakLanjut',
+                        value: 'Selesai'
+                    });
+                    if (response.success) {
+                        setMessage(`Tugas untuk surat ${disposisi.NoSurat} telah ditandai Selesai.`, 'success');
+                        renderPageContent(state.currentPage);
+                    } else {
+                        setMessage(response.message, 'error');
+                    }
+                }
+            }
+        }
+
+        const getArsipContent = () => {
+            const allSurat = state.suratList;
+            
+            // Mengelompokkan berdasarkan bulan/tahun
+            const grouped = allSurat.reduce((acc, surat) => {
+                const date = new Date(surat.TglSurat);
+                const month = date.toLocaleString('default', { month: 'long', year: 'numeric' });
+                if (!acc[month]) acc[month] = [];
+                acc[month].push(surat);
+                return acc;
+            }, {});
+
+            return `
+                <div class="space-y-6">
+                    <h3 class="text-xl font-semibold text-gray-700">Arsip File Google Drive</h3>
+                    <p class="text-sm text-gray-500">File surat diarsip otomatis di Google Drive per bulan. Klik untuk melihat folder arsip atau daftar surat di bulan tersebut.</p>
+                    
+                    ${Object.entries(grouped).map(([month, surats]) => `
+                        <div class="bg-white p-4 rounded-xl card-shadow">
+                            <div class="flex items-center justify-between border-b pb-2 mb-2">
+                                <h4 class="text-lg font-bold text-primary flex items-center">
+                                    <i data-lucide="folder" class="w-5 h-5 mr-2"></i> ${month} (${surats.length} Surat)
+                                </h4>
+                                <a href="#" class="text-sm text-gray-500 hover:text-blue-700">Lihat Folder Drive (Simulasi)</a>
+                            </div>
+                            <div class="space-y-2">
+                                ${surats.map(s => `
+                                    <div class="flex justify-between items-center text-sm border-l-4 ${s.Tipe === 'Masuk' ? 'border-orange-400' : 'border-blue-400'} pl-2 py-1 hover:bg-gray-50 rounded-sm">
+                                        <span>${s.NoSurat} - ${s.Perihal}</span>
+                                        <a href="${s.LinkDrive}" target="_blank" class="text-primary hover:text-blue-700 flex items-center">
+                                            <i data-lucide="external-link" class="w-4 h-4 mr-1"></i> Buka File
+                                        </a>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `).join('')}
+                    
+                </div>
+            `;
+        }
+
+        /** Peta untuk memuat konten halaman */
+        function getPageContent(page) {
+            switch (page) {
+                case 'Dashboard':
+                    return getDashboardContent();
+                case 'Surat Masuk':
+                    return getSuratPageContent('Surat Masuk');
+                case 'Surat Keluar':
+                    return getSuratPageContent('Surat Keluar');
+                case 'Disposisi':
+                    return getDisposisiListContent();
+                case 'Arsip':
+                    return getArsipContent();
+                case 'Manajemen User':
+                    return getUserManagementContent();
+                case 'Log Aktivitas':
+                    return getLogContent();
+                default:
+                    // Jika user login tapi halamannya tidak ada (misalnya saat mode admin)
+                    if (state.isLoggedIn && state.isAdminMode) {
+                        return getUserManagementContent(); // Defaultkan ke Manajmen User
+                    }
+                    return `<div class="p-8 text-center text-gray-500">Halaman tidak ditemukan.</div>`;
+            }
+        }
+        
+        // =========================================================================
+        // UTILITY & INITIALIZATION
+        // =========================================================================
+        
+        /** Cek hash URL saat memuat/berubah */
+        function checkUrlHash() {
+            if (window.location.hash === '#admin') {
+                state.isAdminMode = true;
+            } else {
+                state.isAdminMode = false;
+            }
+        }
+
+        /** Toggle Sidebar untuk Mobile */
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const isHidden = sidebar.classList.contains('-translate-x-full');
+            if (isHidden) {
+                sidebar.classList.remove('-translate-x-full');
+            } else {
+                sidebar.classList.add('-translate-x-full');
+            }
+        }
+
+        /** Inisialisasi aplikasi saat dimuat */
+        window.onload = () => {
+            checkUrlHash(); // Periksa hash saat start
+            window.addEventListener('hashchange', () => {
+                 // Logout jika hash berubah saat sedang login (untuk reset mode)
+                 if (state.isLoggedIn) {
+                    logout();
+                 } else {
+                    checkUrlHash();
+                    render();
+                 }
+            });
+            render();
+        };
+
+    </script>
+</body>
+</html>
