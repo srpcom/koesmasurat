@@ -107,7 +107,8 @@
                     return callGAS(payload, retries - 1);
                 } else {
                     console.error('GAS Call Gagal setelah beberapa kali mencoba.', error);
-                    setMessage(`Gagal terhubung ke Server (GAS) setelah percobaan berulang. Pesan: ${errorMessage}`, 'error');
+                    // MODIFIKASI PESAN INI UNTUK LEBIH MENYOROT MASALAH DEPLOYMENT/KONEKSI
+                    setMessage(`Koneksi ke Server Gagal setelah percobaan berulang. Pastikan URL GAS benar dan di-deploy dengan akses 'Anyone'. Pesan Teknis: ${errorMessage}`, 'error');
                     throw error;
                 }
             }
