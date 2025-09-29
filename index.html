@@ -375,47 +375,7 @@
             document.getElementById('loading-overlay').style.display = show ? 'flex' : 'none';
         }
 
-        /** Fungsi Hashing (Client-side, hanya untuk prototype. GAS akan melakukan hash sebenarnya.) */
-        async function hashString(str) {
-            const encoder = new TextEncoder();
-            const data = encoder.encode(str);
-            const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-            const hashArray = Array.from(new Uint8Array(hashBuffer));
-            const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-            return hashHex;
-        }
-
-        /** Fungsi Fetch API dengan Exponential Backoff */
-        async function fetchWithRetry(url, options, maxRetries = 3) {
-            for (let i = 0; i < maxRetries; i++) {
-                try {
-                    const response = await fetch(url, options);
-                    if (!response.ok) {
-                        const errorBody = await response.text();
-                        throw new Error(`API Error: ${response.status} - ${errorBody}`);
-                    }
-                    // Apps Script often returns text/plain for success, so we must check the header
-                    const contentType = response.headers.get("content-type");
-                    if (contentType && contentType.includes("application/json")) {
-                        return response.json();
-                    } else if (contentType && contentType.includes("text/html")) {
-                        // Handle case where GAS returns HTML error page (e.g., permission denied)
-                        throw new Error("Received HTML response from API, likely a permissions issue or internal GAS error.");
-                    } else {
-                        // Attempt to parse JSON even if header is missing, or return raw text if status 200/OK
-                        try {
-                            return await response.json();
-                        } catch (e) {
-                            return { status: "success", message: "Operation completed successfully (No JSON body expected/received)." };
-                        }
-                    }
-                } catch (error) {
-                    console.error(`Fetch attempt ${i + 1} failed:`, error);
-                    if (i === maxRetries - 1) throw error; 
-                    await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
-                }
-            }
-        }
+        // --- Hashing functionality removed as requested. ---
 
         // --- AUTHENTICATION & ROUTING ---
 
@@ -539,11 +499,8 @@
 
             showLoading(true);
             try {
-                // Hash password client-side before sending
-                const hashedPassword = await hashString(password); 
-                
-                // Menggunakan GET dengan query params untuk kompatibilitas CORS/GAS yang lebih baik
-                const url = `${GAS_API_URL}?action=login&wa=${encodeURIComponent(wa)}&password=${encodeURIComponent(hashedPassword)}&isHashed=true`;
+                // Menggunakan GET dengan plain password
+                const url = `${GAS_API_URL}?action=login&wa=${encodeURIComponent(wa)}&password=${encodeURIComponent(password)}`;
                 
                 const data = await fetchWithRetry(url, { method: 'GET' });
 
@@ -557,7 +514,15 @@
                 }
             } catch (error) {
                 console.error('Login error:', error);
-                showMessage('login-error-message', 'Terjadi kesalahan jaringan/server: ' + error.message, true);
+                let errorMessage = 'Terjadi kesalahan jaringan/server: ' + error.message;
+
+                // --- Peningkatan Panduan Error ---
+                if (error.message.includes('Failed to fetch')) {
+                    errorMessage += '. (Kesalahan Jaringan/CORS). Pastikan URL GAS Anda benar dan Web App di-*deploy* ulang dengan akses "Anyone".';
+                }
+                // --- End Peningkatan Panduan Error ---
+                
+                showMessage('login-error-message', errorMessage, true);
             } finally {
                 showLoading(false);
             }
@@ -570,11 +535,8 @@
 
             showLoading(true);
             try {
-                // Hash password client-side before sending
-                const hashedPassword = await hashString(password);
-                
-                // Menggunakan GET dengan query params untuk kompatibilitas CORS/GAS yang lebih baik
-                const url = `${GAS_API_URL}?action=register&nama=${encodeURIComponent(form['reg-nama'].value.trim())}&wa=${encodeURIComponent(form['reg-wa'].value.trim())}&email=${encodeURIComponent(form['reg-email'].value.trim())}&jabatan=${encodeURIComponent(form['reg-jabatan'].value.trim())}&password=${encodeURIComponent(hashedPassword)}&isHashed=true`;
+                // Menggunakan GET dengan plain password
+                const url = `${GAS_API_URL}?action=register&nama=${encodeURIComponent(form['reg-nama'].value.trim())}&wa=${encodeURIComponent(form['reg-wa'].value.trim())}&email=${encodeURIComponent(form['reg-email'].value.trim())}&jabatan=${encodeURIComponent(form['reg-jabatan'].value.trim())}&password=${encodeURIComponent(password)}`;
 
                 const result = await fetchWithRetry(url, { method: 'GET' });
 
@@ -587,7 +549,15 @@
                 }
             } catch (error) {
                 console.error('Register error:', error);
-                showMessage('register-error-message', 'Terjadi kesalahan jaringan/server: ' + error.message, true);
+                let errorMessage = 'Terjadi kesalahan jaringan/server: ' + error.message;
+
+                // --- Peningkatan Panduan Error ---
+                if (error.message.includes('Failed to fetch')) {
+                    errorMessage += '. (Kesalahan Jaringan/CORS). Pastikan URL GAS Anda benar dan Web App di-*deploy* ulang dengan akses "Anyone".';
+                }
+                // --- End Peningkatan Panduan Error ---
+                
+                showMessage('register-error-message', errorMessage, true);
             } finally {
                 showLoading(false);
             }
@@ -642,7 +612,13 @@
                     }
                 } catch (error) {
                     console.error('Surat submit error:', error);
-                    showMessage('surat-form-message', 'Terjadi kesalahan: ' + error.message, true);
+                    let errorMessage = 'Terjadi kesalahan jaringan/server: ' + error.message;
+
+                    if (error.message.includes('Failed to fetch')) {
+                        errorMessage += '. (Kesalahan Jaringan/CORS). Pastikan URL GAS Anda benar dan Web App di-*deploy* ulang dengan akses "Anyone".';
+                    }
+                    
+                    showMessage('surat-form-message', errorMessage, true);
                 } finally {
                     showLoading(false);
                 }
@@ -782,7 +758,12 @@
                 }
             } catch (error) {
                 console.error('Disposisi submit error:', error);
-                showMessage('dispo-form-message', 'Terjadi kesalahan: ' + error.message, true);
+                let errorMessage = 'Terjadi kesalahan jaringan/server: ' + error.message;
+
+                if (error.message.includes('Failed to fetch')) {
+                    errorMessage += '. (Kesalahan Jaringan/CORS). Pastikan URL GAS Anda benar dan Web App di-*deploy* ulang dengan akses "Anyone".';
+                }
+                showMessage('dispo-form-message', errorMessage, true);
             } finally {
                 showLoading(false);
             }
@@ -862,7 +843,7 @@
                             </span>
                         </td>
                         <td class="px-6 py-4 text-sm font-medium">
-                            <a href="${d.file_url}" target="_blank" class="text-emerald-600 hover:text-emerald-800 font-medium">Lihat Surat</a>
+                            <a href="${d.file_url}" target="_blank" class="text-emerald-600 hover:text-emerald-800 font-medium">Lihat File</a>
                             ${markReadButton}
                             ${markTLButton}
                         </td>
@@ -971,7 +952,7 @@
             }
             
             let html = `
-            <p class="text-sm text-gray-600 mb-4">Hanya Admin yang dapat mereset password user. Password akan di-reset menjadi 'password123' (hash-nya).</p>
+            <p class="text-sm text-gray-600 mb-4">Hanya Admin yang dapat mereset password user. Password akan di-reset menjadi 'password123' (plain text).</p>
             <table class="min-w-full divide-y divide-gray-200">
                 <thead class="bg-gray-50">
                     <tr>
